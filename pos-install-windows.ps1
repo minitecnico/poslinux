@@ -2,7 +2,7 @@
 #  Pos-install Windows - servidor local (usa o winget)
 #
 #  Uso (cole no PowerShell):
-#     irm URL_DESTE_ARQUIVO | iex
+#     irm https://raw.githubusercontent.com/minitecnico/poslinux/refs/heads/main/pos-install-windows.ps1 | iex
 #
 #  Se nao estiver como administrador, ele pede permissao sozinho.
 #  So usa o que ja vem no Windows (PowerShell + winget).
@@ -16,6 +16,7 @@
 #  Para adicionar programas populares, edite a lista "catalogo" do
 #  bloco de dados (DadosB64) ou peca para regenerar este arquivo.
 # ==============================================================
+// irm https://raw.githubusercontent.com/minitecnico/poslinux/refs/heads/main/pos-install-windows.ps1 | iex
 
 $UrlScript = 'https://raw.githubusercontent.com/minitecnico/poslinux/refs/heads/main/pos-install-windows.ps1'
 
