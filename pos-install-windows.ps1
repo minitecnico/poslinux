@@ -16,7 +16,7 @@
 #  Para adicionar programas populares, edite a lista "catalogo" do
 #  bloco de dados (DadosB64) ou peca para regenerar este arquivo.
 # ==============================================================
-// irm https://raw.githubusercontent.com/minitecnico/poslinux/refs/heads/main/pos-install-windows.ps1 | iex
+/ irm https://raw.githubusercontent.com/minitecnico/poslinux/refs/heads/main/pos-install-windows.ps1 | iex
 
 $UrlScript = 'https://raw.githubusercontent.com/minitecnico/poslinux/refs/heads/main/pos-install-windows.ps1'
 
