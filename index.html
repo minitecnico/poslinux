@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pós-install Linux</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;500;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #eef1f6;
+    --surface: #ffffff;
+    --ink: #14213d;
+    --muted: #5b667f;
+    --line: #d5dbe8;
+    --accent: #2f5bff;
+    --accent-ink: #ffffff;
+    --sel: #fff3c4;
+    --sel-line: #d99a00;
+    --term: #0e1630;
+    --term-ink: #dfe6ff;
+    --term-dim: #7f8bb3;
+    --term-ok: #7fe0a8;
+    --font: "Bricolage Grotesque", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1020;
+      --surface: #141b33;
+      --ink: #e8ecfa;
+      --muted: #9aa5c6;
+      --line: #27304f;
+      --accent: #7b9bff;
+      --accent-ink: #0b1020;
+      --sel: #3a3112;
+      --sel-line: #e0a800;
+      --term: #060a17;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: 16px;
+    line-height: 1.5;
+  }
+  [v-cloak] { display: none; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+  .page { max-width: 1240px; margin: 0 auto; padding: 40px 24px 64px; }
+
+  header.top { margin-bottom: 36px; max-width: 640px; }
+  header.top h1 {
+    margin: 0 0 8px;
+    font-size: clamp(2.2rem, 5vw, 3.4rem);
+    line-height: 1.02;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+  }
+  header.top p { margin: 0; color: var(--muted); font-size: 1.1rem; }
+
+  .layout { display: grid; gap: 32px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+  @media (min-width: 1000px) {
+    .layout { grid-template-columns: minmax(0, 1fr) 440px; }
+  }
+
+  section + section { margin-top: 36px; }
+  h2 {
+    display: flex; align-items: center; gap: 12px;
+    margin: 0 0 16px;
+    font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em;
+  }
+  .n {
+    display: inline-grid; place-items: center;
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--ink); color: var(--bg);
+    font-size: 0.95rem; font-weight: 700;
+  }
+  h3 { margin: 28px 0 12px; font-size: 1rem; font-weight: 700; color: var(--muted); }
+
+  /* ---------- distros ---------- */
+  .distros { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  @media (min-width: 640px) { .distros { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+  .distro {
+    text-align: left; padding: 16px;
+    background: var(--surface); border: 2px solid var(--line); border-radius: 12px;
+    transition: border-color .15s, transform .15s;
+  }
+  .distro:hover { border-color: var(--muted); }
+  .distro strong { display: block; font-size: 1.05rem; }
+  .distro span { font-family: var(--mono); font-size: 0.8rem; color: var(--muted); }
+  .distro.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .distro.on strong { color: var(--accent); }
+
+  /* ---------- toolbar ---------- */
+  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .search {
+    flex: 1 1 200px; min-width: 0;
+    padding: 10px 14px; border-radius: 10px;
+    border: 2px solid var(--line); background: var(--surface); color: var(--ink);
+    font: inherit;
+  }
+  .search::placeholder { color: var(--muted); }
+  .btn {
+    padding: 10px 16px; border-radius: 10px; font-weight: 500;
+    background: transparent; border: 2px solid var(--line);
+  }
+  .btn:hover { border-color: var(--muted); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; }
+  .btn.primary:hover { filter: brightness(1.08); }
+
+  /* ---------- programas ---------- */
+  .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+  .tile {
+    position: relative; display: flex; align-items: center; gap: 12px;
+    text-align: left; padding: 12px 14px;
+    background: var(--surface); border: 2px solid var(--line); border-radius: 12px;
+    transition: border-color .15s, background .15s;
+  }
+  .tile:hover { border-color: var(--muted); }
+  .tile .ico { font-size: 1.6rem; line-height: 1; }
+  .tile .nm { display: block; font-weight: 700; line-height: 1.2; }
+  .tile .tag { display: block; font-family: var(--mono); font-size: 0.74rem; color: var(--muted); }
+  .tile.on { background: var(--sel); border-color: var(--sel-line); }
+  .tile.on::after {
+    content: "✓"; position: absolute; top: 8px; right: 10px;
+    font-weight: 800; color: var(--sel-line);
+  }
+  .vazio { color: var(--muted); padding: 24px 0; }
+
+  /* ---------- recibo / script ---------- */
+  .receipt {
+    background: var(--surface); border: 2px solid var(--line); border-radius: 16px;
+    padding: 20px;
+  }
+  @media (min-width: 1000px) {
+    .receipt { position: sticky; top: 16px; max-height: calc(100vh - 32px); display: flex; flex-direction: column; }
+  }
+  .receipt h2 { margin-bottom: 8px; }
+  .resumo { margin: 0 0 14px; color: var(--muted); }
+  .opt { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; cursor: pointer; }
+  .opt input { width: 18px; height: 18px; accent-color: var(--accent); }
+
+  pre.term {
+    margin: 0 0 14px; padding: 16px; border-radius: 10px;
+    background: var(--term); color: var(--term-ink);
+    font-family: var(--mono); font-size: 0.8rem; line-height: 1.55;
+    overflow: auto; min-height: 160px; flex: 1 1 auto;
+    max-height: 420px;
+  }
+  pre.term code { font-family: inherit; }
+  pre.term .ln { display: block; min-height: 1.55em; white-space: pre; }
+  pre.term .cm { color: var(--term-dim); }
+  pre.term .ph { color: var(--term-dim); white-space: normal; }
+
+  .acoes { display: flex; flex-wrap: wrap; gap: 10px; }
+  .acoes .btn { flex: 1 1 140px; }
+  .acoes .btn[disabled] { opacity: .45; cursor: not-allowed; }
+
+  .como { margin: 16px 0 0; font-size: 0.9rem; color: var(--muted); }
+  .como code {
+    display: block; margin-top: 6px; padding: 8px 10px; border-radius: 8px;
+    background: var(--bg); color: var(--ink); font-family: var(--mono); font-size: 0.82rem;
+    overflow-x: auto; white-space: nowrap;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; scroll-behavior: auto !important; }
+  }
+</style>
+</head>
+<body>
+<div id="app" class="page" v-cloak>
+
+  <header class="top">
+    <h1>Pós-install Linux</h1>
+    <p>Escolha a distro, marque os programas e baixe um script pronto para rodar no terminal.</p>
+  </header>
+
+  <div class="layout">
+    <div>
+
+      <!-- 1. Distro -->
+      <section>
+        <h2><span class="n">1</span> Qual distro você usa?</h2>
+        <div class="distros" role="radiogroup" aria-label="Distro">
+          <button
+            v-for="d in DISTROS" :key="d.id"
+            class="distro" :class="{ on: distro === d.id }"
+            role="radio" :aria-checked="distro === d.id"
+            @click="distro = d.id">
+            <strong>{{ d.nome }}</strong>
+            <span>{{ d.sub }}</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- 2. Programas -->
+      <section>
+        <h2><span class="n">2</span> O que você quer instalar?</h2>
+
+        <div class="toolbar">
+          <input class="search" type="search" v-model="busca" placeholder="Buscar programa" aria-label="Buscar programa">
+          <button class="btn" @click="marcarVisiveis">Marcar os exibidos</button>
+          <button class="btn" @click="limpar" :disabled="!sel.length">Limpar</button>
+        </div>
+
+        <div v-for="g in grupos" :key="g.cat">
+          <h3>{{ g.cat }}</h3>
+          <div class="grid">
+            <button
+              v-for="p in g.itens" :key="p.id"
+              class="tile" :class="{ on: sel.includes(p.id) }"
+              :aria-pressed="sel.includes(p.id)"
+              @click="alternar(p.id)">
+              <span class="ico" aria-hidden="true">{{ p.icone }}</span>
+              <span>
+                <span class="nm">{{ p.nome }}</span>
+                <span class="tag">{{ metodo(p) }}</span>
+              </span>
+            </button>
+          </div>
+        </div>
+        <p v-if="!grupos.length" class="vazio">Nenhum programa encontrado para "{{ busca }}".</p>
+      </section>
+    </div>
+
+    <!-- 3. Script -->
+    <aside class="receipt">
+      <h2><span class="n">3</span> Seu script</h2>
+      <p class="resumo">
+        {{ sel.length === 0 ? 'Nenhum programa marcado.' : sel.length + (sel.length === 1 ? ' programa marcado' : ' programas marcados') + ' para ' + distroAtual.nome + '.' }}
+      </p>
+
+      <label class="opt">
+        <input type="checkbox" v-model="atualizar">
+        Atualizar o sistema antes de instalar
+      </label>
+
+      <pre class="term"><code>
+        <span v-if="!sel.length" class="ln ph">Marque programas à esquerda e o script aparece aqui.</span>
+        <span v-for="(l, i) in linhas" :key="i" class="ln" :class="{ cm: l.startsWith('#') }">{{ l }}</span>
+      </code></pre>
+
+      <div class="acoes">
+        <button class="btn primary" :disabled="!sel.length" @click="baixar">Baixar pos-install.sh</button>
+        <button class="btn" :disabled="!sel.length" @click="copiar">{{ copiado ? 'Copiado!' : 'Copiar script' }}</button>
+      </div>
+
+      <p class="como">
+        Depois de baixar, abra o terminal e rode:
+        <code>bash ~/Downloads/pos-install.sh</code>
+      </p>
+    </aside>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.4.21/vue.global.prod.min.js"></script>
+<script>
+const { createApp, ref, computed, watch, onMounted } = Vue;
+
+/* ============================================================
+   DADOS - edite aqui para adicionar distros ou programas
+   ============================================================ */
+
+const DISTROS = [
+  { id: 'apt',    nome: 'Ubuntu / Debian', sub: 'apt (Mint, Pop!_OS)',
+    update:  'sudo apt update && sudo apt upgrade -y',
+    install: 'sudo apt install -y' },
+  { id: 'dnf',    nome: 'Fedora', sub: 'dnf',
+    update:  'sudo dnf upgrade -y',
+    install: 'sudo dnf install -y' },
+  { id: 'pacman', nome: 'Arch', sub: 'pacman (Manjaro, EndeavourOS)',
+    update:  'sudo pacman -Syu --noconfirm',
+    install: 'sudo pacman -S --noconfirm --needed' },
+  { id: 'zypper', nome: 'openSUSE', sub: 'zypper',
+    update:  'sudo zypper refresh && sudo zypper update -y',
+    install: 'sudo zypper install -y' },
+];
+
+/*
+  Cada programa tem um "pkg" por distro:
+    'nome-do-pacote'  -> instalado pelo gerenciador da distro
+    'flatpak:ID'      -> instalado via Flatpak (IDs em flathub.org)
+    'cmd:comando'     -> comando próprio
+*/
+const igual   = (n)  => ({ apt: n, dnf: n, pacman: n, zypper: n });
+const flatpak = (id) => igual('flatpak:' + id);
+const dockerCmd = (pm) => 'cmd:' + pm + ' && sudo systemctl enable --now docker && sudo usermod -aG docker $USER';
+
+const CATALOGO = [
+  // Navegadores
+  { id: 'chrome',  cat: 'Navegadores', icone: '🌐', nome: 'Google Chrome', pkg: flatpak('com.google.Chrome') },
+  { id: 'brave',   cat: 'Navegadores', icone: '🦁', nome: 'Brave',         pkg: flatpak('com.brave.Browser') },
+  { id: 'firefox', cat: 'Navegadores', icone: '🦊', nome: 'Firefox',
+    pkg: { apt: 'firefox', dnf: 'firefox', pacman: 'firefox', zypper: 'MozillaFirefox' } },
+
+  // Escritório e mídia
+  { id: 'libreoffice', cat: 'Escritório e mídia', icone: '📄', nome: 'LibreOffice',
+    pkg: { apt: 'libreoffice', dnf: 'libreoffice', pacman: 'libreoffice-fresh', zypper: 'libreoffice' } },
+  { id: 'vlc',     cat: 'Escritório e mídia', icone: '🎬', nome: 'VLC',         pkg: igual('vlc') },
+  { id: 'gimp',    cat: 'Escritório e mídia', icone: '🎨', nome: 'GIMP',        pkg: igual('gimp') },
+  { id: 'obs',     cat: 'Escritório e mídia', icone: '🎥', nome: 'OBS Studio',  pkg: flatpak('com.obsproject.Studio') },
+  { id: 'spotify', cat: 'Escritório e mídia', icone: '🎧', nome: 'Spotify',     pkg: flatpak('com.spotify.Client') },
+  { id: 'qbittorrent', cat: 'Escritório e mídia', icone: '⬇️', nome: 'qBittorrent', pkg: igual('qbittorrent') },
+
+  // Comunicação e jogos
+  { id: 'telegram', cat: 'Comunicação e jogos', icone: '✈️', nome: 'Telegram', pkg: flatpak('org.telegram.desktop') },
+  { id: 'discord',  cat: 'Comunicação e jogos', icone: '💬', nome: 'Discord',  pkg: flatpak('com.discordapp.Discord') },
+  { id: 'steam',    cat: 'Comunicação e jogos', icone: '🎮', nome: 'Steam',    pkg: flatpak('com.valvesoftware.Steam') },
+
+  // Desenvolvimento
+  { id: 'vscode', cat: 'Desenvolvimento', icone: '🧑‍💻', nome: 'VS Code', pkg: flatpak('com.visualstudio.code') },
+  { id: 'git',    cat: 'Desenvolvimento', icone: '🔀', nome: 'Git',     pkg: igual('git') },
+  { id: 'build',  cat: 'Desenvolvimento', icone: '🔧', nome: 'Ferramentas de compilação',
+    pkg: { apt: 'build-essential', dnf: 'cmd:sudo dnf install -y @development-tools',
+           pacman: 'base-devel', zypper: 'cmd:sudo zypper install -y -t pattern devel_basis' } },
+  { id: 'python', cat: 'Desenvolvimento', icone: '🐍', nome: 'Python + pip',
+    pkg: { apt: 'python3 python3-pip', dnf: 'python3 python3-pip', pacman: 'python python-pip', zypper: 'python3 python3-pip' } },
+  { id: 'node',   cat: 'Desenvolvimento', icone: '🟢', nome: 'Node.js + npm', pkg: igual('nodejs npm') },
+  { id: 'docker', cat: 'Desenvolvimento', icone: '🐳', nome: 'Docker',
+    pkg: { apt: dockerCmd('sudo apt install -y docker.io'),
+           dnf: dockerCmd('sudo dnf install -y moby-engine'),
+           pacman: dockerCmd('sudo pacman -S --noconfirm --needed docker'),
+           zypper: dockerCmd('sudo zypper install -y docker') } },
+
+  // Terminal
+  { id: 'curl',      cat: 'Terminal', icone: '📡', nome: 'curl',      pkg: igual('curl') },
+  { id: 'wget',      cat: 'Terminal', icone: '📥', nome: 'wget',      pkg: igual('wget') },
+  { id: 'vim',       cat: 'Terminal', icone: '📝', nome: 'Vim',       pkg: igual('vim') },
+  { id: 'htop',      cat: 'Terminal', icone: '📊', nome: 'htop',      pkg: igual('htop') },
+  { id: 'tmux',      cat: 'Terminal', icone: '🪟', nome: 'tmux',      pkg: igual('tmux') },
+  { id: 'tree',      cat: 'Terminal', icone: '🌳', nome: 'tree',      pkg: igual('tree') },
+  { id: 'unzip',     cat: 'Terminal', icone: '🗜️', nome: 'unzip',     pkg: igual('unzip') },
+  { id: 'fastfetch', cat: 'Terminal', icone: '💻', nome: 'fastfetch', pkg: igual('fastfetch') },
+];
+
+/* ============================================================
+   App
+   ============================================================ */
+
+createApp({
+  setup() {
+    const distro = ref('apt');
+    const sel = ref([]);
+    const busca = ref('');
+    const atualizar = ref(true);
+    const copiado = ref(false);
+
+    const distroAtual = computed(() => DISTROS.find(d => d.id === distro.value));
+
+    /* ---- persistência (não quebra se o navegador bloquear) ---- */
+    onMounted(() => {
+      try {
+        const salvo = JSON.parse(localStorage.getItem('pos-install') || 'null');
+        if (salvo) {
+          if (DISTROS.some(d => d.id === salvo.distro)) distro.value = salvo.distro;
+          if (Array.isArray(salvo.sel)) sel.value = salvo.sel.filter(id => CATALOGO.some(p => p.id === id));
+          if (typeof salvo.atualizar === 'boolean') atualizar.value = salvo.atualizar;
+        }
+      } catch (e) { /* sem armazenamento: segue sem salvar */ }
+    });
+    watch([distro, sel, atualizar], () => {
+      try {
+        localStorage.setItem('pos-install', JSON.stringify({
+          distro: distro.value, sel: sel.value, atualizar: atualizar.value
+        }));
+      } catch (e) { /* ignora */ }
+    }, { deep: true });
+
+    /* ---- lista filtrada e agrupada ---- */
+    const filtrados = computed(() => {
+      const q = busca.value.trim().toLowerCase();
+      return CATALOGO.filter(p => !q || p.nome.toLowerCase().includes(q) || p.id.includes(q));
+    });
+    const grupos = computed(() => {
+      const mapa = new Map();
+      filtrados.value.forEach(p => {
+        if (!mapa.has(p.cat)) mapa.set(p.cat, []);
+        mapa.get(p.cat).push(p);
+      });
+      return [...mapa].map(([cat, itens]) => ({ cat, itens }));
+    });
+
+    const metodo = (p) => {
+      const spec = p.pkg[distro.value];
+      if (spec.startsWith('flatpak:')) return 'flatpak';
+      if (spec.startsWith('cmd:')) return 'comando';
+      return 'repositório';
+    };
+
+    const alternar = (id) => {
+      sel.value = sel.value.includes(id)
+        ? sel.value.filter(x => x !== id)
+        : [...sel.value, id];
+    };
+    const marcarVisiveis = () => {
+      const novos = filtrados.value.map(p => p.id).filter(id => !sel.value.includes(id));
+      sel.value = [...sel.value, ...novos];
+    };
+    const limpar = () => { sel.value = []; };
+
+    /* ---- geração do script ---- */
+    const script = computed(() => {
+      const d = distroAtual.value;
+      const itens = CATALOGO.filter(p => sel.value.includes(p.id));
+      const L = [];
+      L.push('#!/usr/bin/env bash');
+      L.push('# Gerado por Pós-install Linux para ' + d.nome);
+      L.push('');
+
+      if (atualizar.value) {
+        L.push('echo ">>> Atualizando o sistema..."');
+        L.push(d.update);
+        L.push('');
+      }
+
+      if (itens.some(p => p.pkg[d.id].startsWith('flatpak:'))) {
+        L.push('# Flatpak');
+        L.push('command -v flatpak >/dev/null || ' + d.install + ' flatpak');
+        L.push('flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo');
+        L.push('');
+      }
+
+      itens.forEach(p => {
+        const spec = p.pkg[d.id];
+        let cmd;
+        if (spec.startsWith('flatpak:'))   cmd = 'flatpak install -y flathub ' + spec.slice(8);
+        else if (spec.startsWith('cmd:'))  cmd = spec.slice(4);
+        else                               cmd = d.install + ' ' + spec;
+        L.push('# ' + p.nome);
+        L.push('echo ">>> Instalando ' + p.nome + '"');
+        L.push(cmd + ' || echo "[!] Falhou: ' + p.nome + '"');
+        L.push('');
+      });
+
+      L.push('echo ">>> Pronto! Reinicie a sessão para o menu e o grupo docker atualizarem."');
+      return L.join('\n');
+    });
+    const linhas = computed(() => sel.value.length ? script.value.split('\n') : []);
+
+    /* ---- ações ---- */
+    const baixar = () => {
+      const blob = new Blob([script.value + '\n'], { type: 'text/x-sh' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'pos-install.sh';
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    };
+
+    const copiar = async () => {
+      try {
+        await navigator.clipboard.writeText(script.value + '\n');
+      } catch (e) {
+        const t = document.createElement('textarea');
+        t.value = script.value + '\n';
+        document.body.appendChild(t); t.select();
+        document.execCommand('copy');
+        t.remove();
+      }
+      copiado.value = true;
+      setTimeout(() => (copiado.value = false), 1800);
+    };
+
+    return {
+      DISTROS, distro, distroAtual, sel, busca, atualizar, copiado,
+      grupos, metodo, alternar, marcarVisiveis, limpar, linhas, baixar, copiar,
+    };
+  },
+}).mount('#app');
+</script>
+</body>
+</html>
