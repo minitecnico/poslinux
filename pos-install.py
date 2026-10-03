@@ -15,18 +15,22 @@ Só usa a biblioteca padrão do Python, então não precisa instalar nada.
 SEGURANÇA
 - Escuta apenas em 127.0.0.1 (ninguém na rede acessa).
 - Exige um token aleatório (vai na URL aberta pelo servidor).
-- A página só envia IDs de programas; os comandos vêm do catálogo
-  abaixo, nunca do navegador.
+- A página nunca envia comandos: só IDs do catálogo ou nomes de pacote,
+  que são validados com regras estritas e escapados antes de virar comando.
 """
 
 import json
 import os
+import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
 import threading
+import urllib.request
 import webbrowser
+from urllib.parse import parse_qs, urlparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -191,7 +195,7 @@ HTML = r'''<!DOCTYPE html>
 
   .page { max-width: 1240px; margin: 0 auto; padding: 40px 24px 64px; }
 
-  header.top { margin-bottom: 36px; max-width: 640px; }
+  header.top { margin-bottom: 36px; max-width: 680px; }
   header.top h1 {
     margin: 0 0 8px; font-size: clamp(2.2rem, 5vw, 3.4rem);
     line-height: 1.02; font-weight: 800; letter-spacing: -0.03em;
@@ -199,7 +203,7 @@ HTML = r'''<!DOCTYPE html>
   header.top p { margin: 0; color: var(--muted); font-size: 1.1rem; }
 
   .layout { display: grid; gap: 32px; grid-template-columns: minmax(0, 1fr); align-items: start; }
-  @media (min-width: 1000px) { .layout { grid-template-columns: minmax(0, 1fr) 440px; } }
+  @media (min-width: 1000px) { .layout { grid-template-columns: minmax(0, 1fr) 420px; } }
 
   section + section { margin-top: 36px; }
   h2 {
@@ -214,8 +218,8 @@ HTML = r'''<!DOCTYPE html>
   h3 { margin: 28px 0 12px; font-size: 1rem; font-weight: 700; color: var(--muted); }
 
   .aviso {
-    padding: 14px 16px; border-radius: 12px; margin-bottom: 20px;
-    background: var(--sel); border: 2px solid var(--sel-line);
+    padding: 12px 16px; border-radius: 12px; margin: 12px 0;
+    background: var(--sel); border: 2px solid var(--sel-line); font-size: 0.95rem;
   }
   .aviso.erro { background: transparent; border-color: var(--bad); color: var(--bad); }
 
@@ -234,26 +238,42 @@ HTML = r'''<!DOCTYPE html>
   .distro.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
   .distro.on strong { color: var(--accent); }
 
-  /* toolbar */
-  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  /* busca */
   .search {
-    flex: 1 1 200px; min-width: 0; padding: 10px 14px; border-radius: 10px;
-    border: 2px solid var(--line); background: var(--surface); color: var(--ink); font: inherit;
+    width: 100%; padding: 16px 18px; border-radius: 14px; font: inherit; font-size: 1.15rem;
+    border: 2px solid var(--line); background: var(--surface); color: var(--ink);
   }
   .search::placeholder { color: var(--muted); }
-  .btn {
-    padding: 10px 16px; border-radius: 10px; font-weight: 500;
-    background: transparent; border: 2px solid var(--line);
-  }
-  .btn:hover:not(:disabled) { border-color: var(--muted); }
-  .btn:disabled { opacity: .45; cursor: not-allowed; }
-  .btn.primary {
-    background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
-    font-weight: 700; font-size: 1.05rem; padding: 14px 18px; width: 100%;
-  }
-  .btn.primary:hover:not(:disabled) { filter: brightness(1.08); border-color: var(--accent); }
+  .search:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+  .search:disabled { opacity: .55; }
+  .dica { margin: 8px 2px 0; color: var(--muted); font-size: 0.9rem; }
+  .vazio { color: var(--muted); padding: 20px 0; }
 
-  /* programas */
+  /* resultados */
+  .lista { display: grid; gap: 8px; }
+  .row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; align-items: center;
+    text-align: left; padding: 12px 16px;
+    background: var(--surface); border: 2px solid var(--line); border-radius: 12px;
+    transition: border-color .15s, background .15s;
+  }
+  .row:hover:not(:disabled) { border-color: var(--muted); }
+  .row:disabled { cursor: default; opacity: .6; }
+  .row .rt { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
+  .row .rt strong { font-size: 1.02rem; overflow-wrap: anywhere; }
+  .row .rt small { font-family: var(--mono); font-size: 0.74rem; color: var(--muted); overflow-wrap: anywhere; }
+  .row .rs {
+    grid-column: 1; color: var(--muted); font-size: 0.9rem;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .row .mk {
+    grid-column: 2; grid-row: 1 / span 2; font-weight: 700; font-size: 0.9rem;
+    color: var(--accent); white-space: nowrap;
+  }
+  .row.on { background: var(--sel); border-color: var(--sel-line); }
+  .row.on .mk { color: var(--sel-line); }
+
+  /* populares */
   .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
   .tile {
     position: relative; display: flex; align-items: center; gap: 12px;
@@ -262,32 +282,42 @@ HTML = r'''<!DOCTYPE html>
     transition: border-color .15s, background .15s;
   }
   .tile:hover:not(:disabled) { border-color: var(--muted); }
-  .tile:disabled { cursor: default; }
+  .tile:disabled { cursor: default; opacity: .6; }
   .tile .ico { font-size: 1.6rem; line-height: 1; }
   .tile .nm { display: block; font-weight: 700; line-height: 1.2; }
   .tile .tag { display: block; font-family: var(--mono); font-size: 0.74rem; color: var(--muted); }
   .tile.on { background: var(--sel); border-color: var(--sel-line); }
-  .tile.off { opacity: .45; }
-  .mark {
-    position: absolute; top: 50%; right: 12px; transform: translateY(-50%);
-    font-weight: 800; font-size: 1.1rem; line-height: 1;
-  }
-  .mark.sel { color: var(--sel-line); }
-  .mark.espera { color: var(--muted); }
-  .mark.rodando { color: var(--accent); animation: giro 1s linear infinite; }
-  .mark.ok { color: var(--ok); }
-  .mark.falhou { color: var(--bad); }
-  @keyframes giro { to { transform: translateY(-50%) rotate(360deg); } }
-  .vazio { color: var(--muted); padding: 24px 0; }
+  .tile .check { position: absolute; top: 50%; right: 12px; transform: translateY(-50%); font-weight: 800; color: var(--sel-line); }
 
-  /* painel de instalação */
+  /* painel */
   .painel {
     background: var(--surface); border: 2px solid var(--line);
     border-radius: 16px; padding: 20px;
   }
   @media (min-width: 1000px) { .painel { position: sticky; top: 16px; } }
   .painel h2 { margin-bottom: 8px; }
-  .resumo { margin: 0 0 16px; color: var(--muted); }
+  .resumo { margin: 0 0 14px; color: var(--muted); }
+
+  .itens { list-style: none; margin: 0 0 16px; padding: 0; max-height: 260px; overflow: auto; }
+  .itens li {
+    display: flex; align-items: center; gap: 10px; padding: 8px 4px;
+    border-bottom: 1px solid var(--line);
+  }
+  .itens li:last-child { border-bottom: 0; }
+  .itens .in { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
+  .itens .in small { display: block; font-family: var(--mono); font-size: 0.72rem; color: var(--muted); font-weight: 400; }
+  .itens .x {
+    width: 28px; height: 28px; border-radius: 8px; border: 0; background: transparent;
+    color: var(--muted); font-size: 1rem; line-height: 1;
+  }
+  .itens .x:hover { background: var(--bg); color: var(--bad); }
+  .st { width: 24px; text-align: center; font-weight: 800; }
+  .st.espera { color: var(--muted); }
+  .st.rodando { color: var(--accent); display: inline-block; animation: giro 1s linear infinite; }
+  .st.ok { color: var(--ok); }
+  .st.falhou { color: var(--bad); }
+  @keyframes giro { to { transform: rotate(360deg); } }
+
   .campo { display: block; margin-bottom: 14px; }
   .campo span { display: block; font-weight: 700; margin-bottom: 4px; }
   .campo small { display: block; color: var(--muted); margin-top: 4px; }
@@ -300,6 +330,19 @@ HTML = r'''<!DOCTYPE html>
   .nota { margin: 12px 0 0; font-size: 0.88rem; color: var(--muted); }
   .msg-erro { margin: 0 0 14px; color: var(--bad); font-weight: 500; }
 
+  .btn {
+    padding: 10px 16px; border-radius: 10px; font-weight: 500;
+    background: transparent; border: 2px solid var(--line);
+  }
+  .btn:hover:not(:disabled) { border-color: var(--muted); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.primary {
+    background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
+    font-weight: 700; font-size: 1.05rem; padding: 14px 18px; width: 100%;
+  }
+  .btn.primary:hover:not(:disabled) { filter: brightness(1.08); border-color: var(--accent); }
+  .btn.link { border: 0; padding: 4px 0; color: var(--muted); text-decoration: underline; font-size: 0.9rem; }
+
   .barra { height: 10px; border-radius: 99px; background: var(--bg); overflow: hidden; margin: 6px 0 10px; }
   .barra i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
   .agora { margin: 0 0 12px; font-weight: 500; }
@@ -308,7 +351,7 @@ HTML = r'''<!DOCTYPE html>
     margin: 0 0 14px; padding: 14px; border-radius: 10px;
     background: var(--term); color: var(--term-ink);
     font-family: var(--mono); font-size: 0.78rem; line-height: 1.5;
-    overflow: auto; height: 300px;
+    overflow: auto; height: 260px;
   }
   pre.term .ln { display: block; white-space: pre-wrap; word-break: break-word; }
   pre.term .info { color: #8fb1ff; font-weight: 500; }
@@ -324,7 +367,7 @@ HTML = r'''<!DOCTYPE html>
 
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
-    .mark.rodando { animation: none; }
+    .st.rodando { animation: none; }
   }
 </style>
 </head>
@@ -333,7 +376,7 @@ HTML = r'''<!DOCTYPE html>
 
   <header class="top">
     <h1>Pós-install Linux</h1>
-    <p>Marque os programas, clique em instalar e acompanhe tudo por aqui.</p>
+    <p>Procure qualquer programa, monte sua lista e clique em instalar. Tudo acontece aqui, ao vivo.</p>
   </header>
 
   <div v-if="erroGeral" class="aviso erro">{{ erroGeral }}</div>
@@ -348,59 +391,110 @@ HTML = r'''<!DOCTYPE html>
                   class="distro" :class="{ on: distro === d.id }"
                   role="radio" :aria-checked="distro === d.id"
                   :disabled="fase === 'instalando'"
-                  @click="distro = d.id">
+                  @click="escolherDistro(d.id)">
             <strong>{{ d.nome }}</strong>
             <span>{{ d.sub }}</span>
             <em v-if="estado.detectada === d.id">detectada neste computador</em>
           </button>
         </div>
-        <p v-if="estado.detectada && estado.detectada !== distro" class="aviso" style="margin-top:12px">
+        <p v-if="estado.detectada && estado.detectada !== distro" class="aviso">
           Este computador parece ser {{ nomeDistro(estado.detectada) }}, mas você escolheu {{ nomeDistro(distro) }}. Os comandos podem falhar.
         </p>
+        <p v-if="avisoDistro" class="aviso">{{ avisoDistro }}</p>
       </section>
 
-      <!-- 2. Programas -->
+      <!-- 2. Busca -->
       <section>
         <h2><span class="n">2</span> O que você quer instalar?</h2>
 
-        <div class="toolbar">
-          <input class="search" type="search" v-model="busca" placeholder="Buscar programa" aria-label="Buscar programa">
-          <button class="btn" @click="marcarVisiveis" :disabled="fase !== 'escolha'">Marcar os exibidos</button>
-          <button class="btn" @click="limpar" :disabled="fase !== 'escolha' || !sel.length">Limpar</button>
-        </div>
+        <input class="search" type="search" v-model="busca" :disabled="fase !== 'escolha'"
+               placeholder="Buscar qualquer programa (ex.: onlyoffice, blender, docker, obs)"
+               aria-label="Buscar programa" autofocus>
+        <p class="dica">Busca ao vivo no Flathub (apps gráficos) e nos repositórios do {{ nomeDistro(distro) }}.</p>
 
-        <div v-for="g in grupos" :key="g.cat">
-          <h3>{{ g.cat }}</h3>
-          <div class="grid">
-            <button v-for="p in g.itens" :key="p.id"
-                    class="tile"
-                    :class="{ on: sel.includes(p.id), off: fase !== 'escolha' && !sel.includes(p.id) }"
-                    :aria-pressed="sel.includes(p.id)"
-                    :disabled="fase !== 'escolha'"
-                    @click="alternar(p.id)">
-              <span class="ico" aria-hidden="true">{{ p.icone }}</span>
-              <span>
-                <span class="nm">{{ p.nome }}</span>
-                <span class="tag">{{ p.metodos[distro] }}</span>
-              </span>
-              <span class="mark" :class="classeMarca(p)">{{ simbolo(p) }}</span>
-            </button>
+        <!-- resultados da busca -->
+        <template v-if="termoValido">
+          <p v-if="buscando" class="vazio">Procurando "{{ busca.trim() }}"...</p>
+          <p v-for="e in resultados.erros" :key="e" class="aviso">{{ e }}</p>
+
+          <template v-if="resultados.flatpak.length">
+            <h3>Apps no Flathub ({{ resultados.flatpak.length }})</h3>
+            <div class="lista">
+              <button v-for="f in resultados.flatpak" :key="'f' + f.id"
+                      class="row" :class="{ on: estaSel('flatpak:' + f.id) }"
+                      :disabled="fase !== 'escolha'"
+                      @click="alternar({ chave: 'flatpak:' + f.id, nome: f.nome, fonte: 'flatpak' })">
+                <span class="rt"><strong>{{ f.nome }}</strong><small>{{ f.id }}</small></span>
+                <span class="rs">{{ f.resumo }}</span>
+                <span class="mk">{{ estaSel('flatpak:' + f.id) ? '✓ Na lista' : '+ Adicionar' }}</span>
+              </button>
+            </div>
+          </template>
+
+          <template v-if="resultados.repo.length">
+            <h3>Pacotes do repositório ({{ resultados.repo.length }})</h3>
+            <div class="lista">
+              <button v-for="r in resultados.repo" :key="'r' + r.nome"
+                      class="row" :class="{ on: estaSel('repo:' + r.nome) }"
+                      :disabled="fase !== 'escolha'"
+                      @click="alternar({ chave: 'repo:' + r.nome, nome: r.nome, fonte: 'repositório' })">
+                <span class="rt"><strong>{{ r.nome }}</strong></span>
+                <span class="rs">{{ r.resumo }}</span>
+                <span class="mk">{{ estaSel('repo:' + r.nome) ? '✓ Na lista' : '+ Adicionar' }}</span>
+              </button>
+            </div>
+          </template>
+
+          <p v-if="!buscando && !temResultados" class="vazio">
+            Nada encontrado para "{{ busca.trim() }}". Tente outro nome ou uma palavra mais curta.
+          </p>
+        </template>
+
+        <!-- populares (busca vazia) -->
+        <template v-else>
+          <div v-for="g in grupos" :key="g.cat">
+            <h3>Populares: {{ g.cat }}</h3>
+            <div class="grid">
+              <button v-for="p in g.itens" :key="p.id"
+                      class="tile" :class="{ on: estaSel('cat:' + p.id) }"
+                      :aria-pressed="estaSel('cat:' + p.id)"
+                      :disabled="fase !== 'escolha'"
+                      @click="alternar({ chave: 'cat:' + p.id, nome: p.nome, fonte: p.metodos[distro] })">
+                <span class="ico" aria-hidden="true">{{ p.icone }}</span>
+                <span>
+                  <span class="nm">{{ p.nome }}</span>
+                  <span class="tag">{{ p.metodos[distro] }}</span>
+                </span>
+                <span v-if="estaSel('cat:' + p.id)" class="check">✓</span>
+              </button>
+            </div>
           </div>
-        </div>
-        <p v-if="!grupos.length" class="vazio">Nenhum programa encontrado para "{{ busca }}".</p>
+        </template>
       </section>
     </div>
 
-    <!-- 3. Instalar -->
+    <!-- 3. Lista e instalação -->
     <aside class="painel">
-      <h2><span class="n">3</span> {{ fase === 'escolha' ? 'Instalar' : (fase === 'instalando' ? 'Instalando' : 'Concluído') }}</h2>
+      <h2><span class="n">3</span> {{ fase === 'escolha' ? 'Sua lista' : (fase === 'instalando' ? 'Instalando' : 'Concluído') }}</h2>
+
+      <template v-if="fase === 'escolha'">
+        <p v-if="!sel.length" class="resumo">Nada na lista ainda. Busque um programa ou escolha entre os populares.</p>
+        <p v-else class="resumo">
+          {{ sel.length }} {{ sel.length === 1 ? 'item' : 'itens' }}
+          <button class="btn link" @click="limpar">limpar tudo</button>
+        </p>
+      </template>
+
+      <ul v-if="sel.length" class="itens">
+        <li v-for="s in sel" :key="s.chave">
+          <span class="in">{{ s.nome }}<small>{{ s.fonte }}</small></span>
+          <button v-if="fase === 'escolha'" class="x" @click="remover(s.chave)" :aria-label="'Remover ' + s.nome">✕</button>
+          <span v-else class="st" :class="status[s.chave] || 'espera'">{{ simbolo(s.chave) }}</span>
+        </li>
+      </ul>
 
       <!-- antes de instalar -->
       <template v-if="fase === 'escolha'">
-        <p class="resumo">
-          {{ sel.length === 0 ? 'Nenhum programa marcado.' : sel.length + (sel.length === 1 ? ' programa marcado.' : ' programas marcados.') }}
-        </p>
-
         <p v-if="estado.ocupado" class="msg-erro">Já existe uma instalação em andamento neste computador. Espere terminar.</p>
         <p v-if="!estado.tem_sudo" class="msg-erro">O sudo não foi encontrado. Rode o servidor como root ou instale o sudo.</p>
 
@@ -418,7 +512,7 @@ HTML = r'''<!DOCTYPE html>
         <p v-if="erro" class="msg-erro">{{ erro }}</p>
 
         <button class="btn primary" :disabled="!sel.length || estado.ocupado || !estado.tem_sudo" @click="instalar">
-          {{ sel.length ? 'Instalar ' + sel.length + (sel.length === 1 ? ' programa' : ' programas') : 'Instalar' }}
+          {{ sel.length ? 'Instalar ' + sel.length + (sel.length === 1 ? ' item' : ' itens') : 'Instalar' }}
         </button>
         <p class="nota">Tudo roda neste computador, pelo servidor que você abriu no terminal.</p>
       </template>
@@ -459,23 +553,28 @@ const { createApp, ref, computed, watch, nextTick, onMounted } = Vue;
 
 const TOKEN = new URLSearchParams(location.search).get('t') || '';
 const NOMES_ETAPA = { _update: 'o sistema', _flatpak: 'o Flatpak' };
+const VAZIO = () => ({ repo: [], flatpak: [], erros: [] });
 
 createApp({
   setup() {
     const estado = ref(null);
     const erroGeral = ref('');
     const distro = ref('apt');
-    const sel = ref([]);
+    const sel = ref([]);               // [{ chave, nome, fonte }]
     const busca = ref('');
     const atualizar = ref(true);
     const senha = ref('');
     const erro = ref('');
+    const avisoDistro = ref('');
+
+    const resultados = ref(VAZIO());
+    const buscando = ref(false);
 
     const fase = ref('escolha');       // escolha | instalando | fim
-    const status = ref({});            // id -> espera | rodando | ok | falhou
+    const status = ref({});            // chave -> espera | rodando | ok | falhou
     const log = ref([]);
     const atual = ref('');
-    const ordem = ref([]);             // ids enviados nesta rodada
+    const ordem = ref([]);
     const semFim = ref(false);
     const logEl = ref(null);
 
@@ -484,6 +583,7 @@ createApp({
       headers: { 'X-Token': TOKEN, 'Content-Type': 'application/json', ...(opcoes.headers || {}) },
     });
 
+    /* ---------- início ---------- */
     onMounted(async () => {
       if (!TOKEN) {
         erroGeral.value = 'Abra esta página pelo endereço mostrado no terminal (ele inclui um código de acesso).';
@@ -496,10 +596,14 @@ createApp({
 
         distro.value = dados.detectada || 'apt';
         try {
-          const salvo = JSON.parse(localStorage.getItem('pos-install-local') || 'null');
+          const salvo = JSON.parse(localStorage.getItem('pos-install-local-v2') || 'null');
           if (salvo) {
             if (!dados.detectada && dados.distros.some(d => d.id === salvo.distro)) distro.value = salvo.distro;
-            if (Array.isArray(salvo.sel)) sel.value = salvo.sel.filter(id => dados.catalogo.some(p => p.id === id));
+            if (Array.isArray(salvo.sel)) {
+              sel.value = salvo.sel.filter(s => s && typeof s.chave === 'string' && typeof s.nome === 'string'
+                && (!s.chave.startsWith('cat:') || dados.catalogo.some(p => 'cat:' + p.id === s.chave))
+                && (!s.chave.startsWith('repo:') || salvo.distro === distro.value));
+            }
             if (typeof salvo.atualizar === 'boolean') atualizar.value = salvo.atualizar;
           }
         } catch (e) { /* sem armazenamento: segue sem salvar */ }
@@ -511,53 +615,83 @@ createApp({
 
     watch([distro, sel, atualizar], () => {
       try {
-        localStorage.setItem('pos-install-local', JSON.stringify({
+        localStorage.setItem('pos-install-local-v2', JSON.stringify({
           distro: distro.value, sel: sel.value, atualizar: atualizar.value,
         }));
       } catch (e) { /* ignora */ }
     }, { deep: true });
 
-    /* ---------- lista ---------- */
-    const filtrados = computed(() => {
-      if (!estado.value) return [];
-      const q = busca.value.trim().toLowerCase();
-      return estado.value.catalogo.filter(p => !q || p.nome.toLowerCase().includes(q) || p.id.includes(q));
-    });
+    /* ---------- busca ao vivo ---------- */
+    let timer = null;
+    let seq = 0;
+    const termoValido = computed(() => busca.value.trim().length >= 2);
+    const temResultados = computed(() => resultados.value.flatpak.length > 0 || resultados.value.repo.length > 0);
+
+    const buscar = async (q) => {
+      const meu = ++seq;
+      try {
+        const r = await api('/api/buscar?q=' + encodeURIComponent(q) + '&distro=' + encodeURIComponent(distro.value));
+        const dados = await r.json();
+        if (meu !== seq) return;                       // chegou uma busca mais nova
+        resultados.value = r.ok ? { ...VAZIO(), ...dados } : { ...VAZIO(), erros: [dados.erro || 'Erro na busca.'] };
+      } catch (e) {
+        if (meu === seq) resultados.value = { ...VAZIO(), erros: ['Não consegui falar com o servidor local.'] };
+      } finally {
+        if (meu === seq) buscando.value = false;
+      }
+    };
+
+    const agendarBusca = () => {
+      clearTimeout(timer);
+      const q = busca.value.trim();
+      if (q.length < 2) { seq++; buscando.value = false; resultados.value = VAZIO(); return; }
+      buscando.value = true;
+      timer = setTimeout(() => buscar(q), 400);
+    };
+    watch(busca, agendarBusca);
+
+    const escolherDistro = (id) => {
+      if (id === distro.value) return;
+      distro.value = id;
+      const antes = sel.value.length;
+      sel.value = sel.value.filter(s => !s.chave.startsWith('repo:'));   // nomes de pacote dependem da distro
+      avisoDistro.value = sel.value.length < antes
+        ? 'Os pacotes de repositório foram tirados da lista, porque os nomes mudam de distro para distro. Busque de novo.'
+        : '';
+      agendarBusca();
+    };
+
+    /* ---------- populares ---------- */
     const grupos = computed(() => {
       const mapa = new Map();
-      filtrados.value.forEach(p => {
+      (estado.value ? estado.value.catalogo : []).forEach(p => {
         if (!mapa.has(p.cat)) mapa.set(p.cat, []);
         mapa.get(p.cat).push(p);
       });
       return [...mapa].map(([cat, itens]) => ({ cat, itens }));
     });
 
-    const nomeDistro = (id) => (estado.value.distros.find(d => d.id === id) || {}).nome || id;
-    const nomePrograma = (id) =>
-      NOMES_ETAPA[id] || ((estado.value.catalogo.find(p => p.id === id) || {}).nome) || id;
+    const nomeDistro = (id) => ((estado.value && estado.value.distros.find(d => d.id === id)) || {}).nome || id;
 
-    const alternar = (id) => {
-      sel.value = sel.value.includes(id) ? sel.value.filter(x => x !== id) : [...sel.value, id];
+    /* ---------- lista ---------- */
+    const estaSel = (chave) => sel.value.some(s => s.chave === chave);
+    const alternar = (item) => {
+      sel.value = estaSel(item.chave)
+        ? sel.value.filter(s => s.chave !== item.chave)
+        : [...sel.value, item];
     };
-    const marcarVisiveis = () => {
-      const novos = filtrados.value.map(p => p.id).filter(id => !sel.value.includes(id));
-      sel.value = [...sel.value, ...novos];
-    };
+    const remover = (chave) => { sel.value = sel.value.filter(s => s.chave !== chave); };
     const limpar = () => { sel.value = []; };
 
-    /* ---------- marcas nos cards ---------- */
-    const classeMarca = (p) => fase.value === 'escolha' ? 'sel' : (status.value[p.id] || 'espera');
-    const simbolo = (p) => {
-      if (!sel.value.includes(p.id) && fase.value !== 'escolha') return '';
-      if (fase.value === 'escolha') return sel.value.includes(p.id) ? '✓' : '';
-      return { espera: '…', rodando: '↻', ok: '✓', falhou: '✕' }[status.value[p.id]] || '';
-    };
-
     /* ---------- progresso ---------- */
+    const nomePrograma = (chave) =>
+      NOMES_ETAPA[chave] || ((sel.value.find(s => s.chave === chave) || {}).nome) || chave;
+    const simbolo = (chave) => ({ espera: '…', rodando: '↻', ok: '✓', falhou: '✕' }[status.value[chave] || 'espera']);
+
     const total = computed(() => ordem.value.length);
-    const feitos = computed(() => ordem.value.filter(id => ['ok', 'falhou'].includes(status.value[id])).length);
+    const feitos = computed(() => ordem.value.filter(c => ['ok', 'falhou'].includes(status.value[c])).length);
     const falhas = computed(() =>
-      Object.keys(status.value).filter(id => status.value[id] === 'falhou').map(nomePrograma));
+      Object.keys(status.value).filter(c => status.value[c] === 'falhou').map(nomePrograma));
 
     const escrever = (m, k = '') => {
       log.value.push({ m, k });
@@ -592,13 +726,12 @@ createApp({
       if (!sel.value.length) return;
       if (estado.value.precisa_senha && !senha.value) { erro.value = 'Digite a senha do sudo.'; return; }
 
-      // mantém a ordem do catálogo
-      const ids = estado.value.catalogo.map(p => p.id).filter(id => sel.value.includes(id));
+      const chaves = sel.value.map(s => s.chave);
       let r;
       try {
         r = await api('/api/instalar', {
           method: 'POST',
-          body: JSON.stringify({ distro: distro.value, ids, atualizar: atualizar.value, senha: senha.value }),
+          body: JSON.stringify({ distro: distro.value, itens: chaves, atualizar: atualizar.value, senha: senha.value }),
         });
       } catch (e) { erro.value = 'Não consegui falar com o servidor local.'; return; }
 
@@ -609,9 +742,9 @@ createApp({
       }
 
       senha.value = '';
-      ordem.value = ids;
+      ordem.value = chaves;
       status.value = {};
-      ids.forEach(id => { status.value[id] = 'espera'; });
+      chaves.forEach(c => { status.value[c] = 'espera'; });
       log.value = [];
       atual.value = '';
       semFim.value = true;     // vira false quando chegar o evento "fim"
@@ -646,10 +779,11 @@ createApp({
     };
 
     return {
-      estado, erroGeral, distro, sel, busca, atualizar, senha, erro,
-      fase, log, atual, semFim, logEl,
-      grupos, nomeDistro, alternar, marcarVisiveis, limpar,
-      classeMarca, simbolo, total, feitos, falhas, instalar, voltar,
+      estado, erroGeral, distro, sel, busca, atualizar, senha, erro, avisoDistro,
+      resultados, buscando, termoValido, temResultados,
+      fase, status, log, atual, semFim, logEl,
+      grupos, nomeDistro, escolherDistro, estaSel, alternar, remover, limpar,
+      simbolo, total, feitos, falhas, instalar, voltar,
     };
   },
 }).mount('#app');
@@ -704,7 +838,47 @@ def metodo(spec):
     return "repositório"
 
 
-def montar_script(distro_id, ids, atualizar):
+# ----------------------------------------------------------------------
+#  Itens escolhidos pelo usuário. Formato das chaves:
+#    cat:ID          programa do catálogo "populares"
+#    repo:pacote     pacote do repositório da distro (vindo da busca)
+#    flatpak:app.id  app do Flathub (vindo da busca)
+# ----------------------------------------------------------------------
+
+RE_REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9+._:@-]{0,127}")
+RE_FLATPAK = re.compile(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+")
+
+
+def validar_item(chave):
+    if not isinstance(chave, str) or len(chave) > 220:
+        return False
+    tipo, _, valor = chave.partition(":")
+    if tipo == "cat":
+        return valor in POR_ID
+    if tipo == "repo":
+        return RE_REPO.fullmatch(valor) is not None
+    if tipo == "flatpak":
+        return RE_FLATPAK.fullmatch(valor) is not None and len(valor) <= 200
+    return False
+
+
+def comando_do_item(distro_id, chave):
+    """Devolve (comando, usa_flatpak)."""
+    d = DISTROS[distro_id]
+    tipo, _, valor = chave.partition(":")
+    if tipo == "cat":
+        spec = POR_ID[valor]["pkg"][distro_id]
+        if spec.startswith("flatpak:"):
+            return "flatpak install -y flathub " + spec[len("flatpak:"):], True
+        if spec.startswith("cmd:"):
+            return spec[len("cmd:"):], False
+        return d["install"] + " " + spec, False
+    if tipo == "repo":
+        return d["install"] + " " + shlex.quote(valor), False
+    return "flatpak install -y flathub " + shlex.quote(valor), True
+
+
+def montar_script(distro_id, itens, atualizar):
     """Gera o script bash. Cada etapa imprime marcadores @@START/@@OK/@@FAIL
     que o servidor traduz em eventos para a página."""
     d = DISTROS[distro_id]
@@ -715,27 +889,205 @@ def montar_script(distro_id, ids, atualizar):
         linhas.append('if %s; then echo "@@OK|%s"; else echo "@@FAIL|%s"; fi' % (comando, etapa_id, etapa_id))
         linhas.append("")
 
+    comandos = [(chave,) + comando_do_item(distro_id, chave) for chave in itens]
+
     if atualizar:
         etapa("_update", d["update"])
 
-    itens = [POR_ID[i] for i in ids]
-    if any(p["pkg"][distro_id].startswith("flatpak:") for p in itens):
+    if any(usa_flatpak for _, _, usa_flatpak in comandos):
         etapa("_flatpak",
               "( command -v flatpak >/dev/null 2>&1 || %s flatpak ) && "
               "flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo"
               % d["install"])
 
-    for p in itens:
-        spec = p["pkg"][distro_id]
-        if spec.startswith("flatpak:"):
-            cmd = "flatpak install -y flathub " + spec[len("flatpak:"):]
-        elif spec.startswith("cmd:"):
-            cmd = spec[len("cmd:"):]
-        else:
-            cmd = d["install"] + " " + spec
-        etapa(p["id"], cmd)
+    for chave, cmd, _ in comandos:
+        etapa(chave, cmd)
 
     return "\n".join(linhas)
+
+
+# ----------------------------------------------------------------------
+#  Busca ao vivo: repositórios da distro + Flathub
+# ----------------------------------------------------------------------
+
+def sanitizar_busca(q):
+    q = re.sub(r"[^\w .+\-]", " ", q or "", flags=re.UNICODE)
+    return re.sub(r"\s+", " ", q).strip()[:60]
+
+
+def rodar(cmd, timeout=25):
+    """Roda um comando de leitura (sem shell) e devolve a saída de texto."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=timeout,
+                           env=dict(os.environ, LC_ALL="C"))
+        return r.stdout.decode("utf-8", "replace")
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def parse_apt(texto):
+    res = []
+    for linha in texto.splitlines():
+        nome, sep, resumo = linha.partition(" - ")
+        if sep and RE_REPO.fullmatch(nome.strip()):
+            res.append({"nome": nome.strip(), "resumo": resumo.strip()})
+    return res
+
+
+ARQUITETURAS = {"x86_64", "noarch", "i686", "i386", "aarch64", "ppc64le", "s390x", "armv7hl", "src"}
+
+
+def parse_dnf(texto):
+    res, vistos = [], set()
+    for linha in texto.splitlines():
+        if not linha.strip() or linha.lstrip().startswith(("=", "Matched", "Last metadata", "Updating")):
+            continue
+        m = re.match(r"^\s*(\S+)\s+(?::\s+)?(.*)$", linha)
+        if not m or "." not in m.group(1):
+            continue
+        nome, _, arq = m.group(1).rpartition(".")
+        if arq in ARQUITETURAS and nome not in vistos and RE_REPO.fullmatch(nome):
+            vistos.add(nome)
+            res.append({"nome": nome, "resumo": m.group(2).strip()})
+    return res
+
+
+def parse_pacman(texto):
+    res, atual = [], None
+    for linha in texto.splitlines():
+        if linha and not linha[0].isspace():
+            primeiro = linha.split()[0]
+            if "/" in primeiro:
+                nome = primeiro.split("/", 1)[1]
+                atual = {"nome": nome, "resumo": ""} if RE_REPO.fullmatch(nome) else None
+                if atual:
+                    res.append(atual)
+        elif atual is not None and not atual["resumo"]:
+            atual["resumo"] = linha.strip()
+    return res
+
+
+def parse_zypper(texto):
+    res, vistos = [], set()
+    for linha in texto.splitlines():
+        partes = [p.strip() for p in linha.split("|")]
+        if len(partes) >= 4 and partes[1] not in ("Name", "") and RE_REPO.fullmatch(partes[1]) \
+                and partes[1] not in vistos:
+            vistos.add(partes[1])
+            res.append({"nome": partes[1], "resumo": partes[2]})
+    return res
+
+
+def ordenar_por_nome(itens, q):
+    """Nome igual vem primeiro, depois começa com, depois contém todas as palavras,
+    depois contém alguma; quem só casou na descrição fica no fim (ordem original)."""
+    ql = q.lower()
+    termos = ql.split()
+    junto = ql.replace(" ", "")
+
+    def pontos(it):
+        n = it["nome"].lower()
+        if n in (ql, junto):
+            return 0
+        if n.startswith(ql) or n.startswith(junto):
+            return 1
+        if ql in n or junto in n or all(t in n for t in termos):
+            return 2
+        if any(t in n for t in termos):
+            return 3
+        return 4
+
+    def chave(it):
+        p = pontos(it)
+        return (p, len(it["nome"]) if p < 4 else 0, it["nome"] if p < 4 else "")
+
+    return sorted(itens, key=chave)
+
+
+def _busca_repo_termos(distro, termos):
+    if distro == "apt":
+        if not shutil.which("apt-cache"):
+            return []
+        return parse_apt(rodar(["apt-cache", "search"] + termos))
+    if distro == "dnf":
+        if not shutil.which("dnf"):
+            return []
+        return parse_dnf(rodar(["dnf", "-q", "search"] + termos, timeout=90))
+    if distro == "pacman":
+        if not shutil.which("pacman"):
+            return []
+        regex = [t.replace(".", r"\.").replace("+", r"\+") for t in termos]
+        return parse_pacman(rodar(["pacman", "-Ss"] + regex))
+    if not shutil.which("zypper"):
+        return []
+    return parse_zypper(rodar(["zypper", "-n", "--no-refresh", "search", "--type", "package"] + termos, timeout=60))
+
+
+def busca_repo(distro, q):
+    termos = q.split()
+    lista = _busca_repo_termos(distro, termos)
+    if len(termos) > 1:  # "libre office" também deve achar "libreoffice"
+        vistos = {it["nome"] for it in lista}
+        lista += [it for it in _busca_repo_termos(distro, ["".join(termos)]) if it["nome"] not in vistos]
+    return ordenar_por_nome(lista, q)[:50]
+
+
+def busca_flathub(q):
+    """Devolve (lista, aviso). Usa a API pública do Flathub; se falhar, tenta o flatpak local."""
+    aviso = ""
+    try:
+        req = urllib.request.Request(
+            "https://flathub.org/api/v2/search",
+            data=json.dumps({"query": q, "filters": []}).encode(),
+            headers={"Content-Type": "application/json", "User-Agent": "pos-install-linux"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            dados = json.loads(r.read().decode("utf-8", "replace"))
+        res = []
+        for h in dados.get("hits", []):
+            app_id = str(h.get("app_id") or h.get("id") or "").strip()
+            if RE_FLATPAK.fullmatch(app_id):
+                res.append({"id": app_id, "nome": str(h.get("name") or app_id),
+                            "resumo": str(h.get("summary") or "")})
+        return res[:40], aviso
+    except Exception as e:  # rede, certificado, formato inesperado...
+        aviso = "Não consegui consultar o Flathub (%s)." % (str(e)[:80] or type(e).__name__)
+
+    if shutil.which("flatpak"):
+        saida = rodar(["flatpak", "search", "--columns=application,name,description", q], timeout=30)
+        res = []
+        for linha in saida.splitlines():
+            p = linha.split("\t")
+            if len(p) >= 2 and RE_FLATPAK.fullmatch(p[0].strip()):
+                res.append({"id": p[0].strip(), "nome": p[1].strip() or p[0].strip(),
+                            "resumo": p[2].strip() if len(p) > 2 else ""})
+        if res:
+            return res[:40], ""
+    return [], aviso
+
+
+def buscar_tudo(distro, q):
+    saida = {"repo": [], "flatpak": [], "erros": []}
+
+    def t_repo():
+        try:
+            saida["repo"] = busca_repo(distro, q)
+        except Exception as e:
+            saida["erros"].append("Erro ao buscar nos repositórios: %s" % e)
+
+    def t_flat():
+        try:
+            saida["flatpak"], aviso = busca_flathub(q)
+            if aviso:
+                saida["erros"].append(aviso)
+        except Exception as e:
+            saida["erros"].append("Erro ao buscar no Flathub: %s" % e)
+
+    fios = [threading.Thread(target=t_repo), threading.Thread(target=t_flat)]
+    for f in fios:
+        f.start()
+    for f in fios:
+        f.join()
+    return saida
 
 
 lock = threading.Lock()  # só uma instalação por vez
@@ -801,6 +1153,18 @@ class Handler(BaseHTTPRequestHandler):
                 "ocupado": lock.locked(),
             })
 
+        if rota == "/api/buscar":
+            if not self._token_ok():
+                return self._json(403, {"erro": "Token inválido."})
+            params = parse_qs(urlparse(self.path).query)
+            q = sanitizar_busca((params.get("q") or [""])[0])
+            distro = (params.get("distro") or [""])[0]
+            if distro not in DISTROS:
+                distro = detectar_distro() or "apt"
+            if len(q) < 2:
+                return self._json(200, {"repo": [], "flatpak": [], "erros": []})
+            return self._json(200, buscar_tudo(distro, q))
+
         self._json(404, {"erro": "Não encontrado."})
 
     # ---- POST ----
@@ -819,7 +1183,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(413, {"erro": "Pedido grande demais."})
             dados = json.loads(self.rfile.read(tamanho) or b"{}")
             distro = dados["distro"]
-            ids = dados["ids"]
+            itens = dados["itens"]
             atualizar = bool(dados.get("atualizar"))
             senha = str(dados.get("senha") or "")[:256]
         except (ValueError, KeyError, TypeError):
@@ -827,9 +1191,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if distro not in DISTROS:
             return self._json(400, {"erro": "Distro desconhecida."})
-        if not isinstance(ids, list) or not ids or not all(isinstance(i, str) and i in POR_ID for i in ids):
+        if not isinstance(itens, list) or not itens or len(itens) > 300 or not all(validar_item(i) for i in itens):
             return self._json(400, {"erro": "Lista de programas inválida."})
-        ids = list(dict.fromkeys(ids))  # remove duplicados mantendo a ordem
+        itens = list(dict.fromkeys(itens))  # remove duplicados mantendo a ordem
 
         if not eh_root() and not shutil.which("sudo"):
             return self._json(400, {"erro": "O comando sudo não foi encontrado neste sistema."})
@@ -853,7 +1217,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 prefixo, usar_senha = ["sudo", "-n"], False
 
-            script = montar_script(distro, ids, atualizar)
+            script = montar_script(distro, itens, atualizar)
 
             # --- começa a transmitir o progresso ---
             self.send_response(200)
